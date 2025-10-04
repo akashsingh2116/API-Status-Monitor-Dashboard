@@ -3,13 +3,13 @@ import Log from "../models/log.js";
 import ApiConfig from "../models/config.js";
 
 /**
- * 🔍 SRD-Compliant Tracer Middleware (Final Version)
- * ✅ Captures method, endpoint, status, response time, console logs
+ * 🔍 SRD-Compliant Tracer Middleware (Final Production Build)
+ * ✅ Captures API activity, method, status, and response time
  * ✅ Generates unique traceId
- * ✅ Auto-creates ApiConfig atomically (no duplicates)
+ * ✅ Auto-creates ApiConfig entries atomically (no duplicates)
  * ✅ Keeps firstSeen/startDate consistent
- * ✅ Respects toggles: enabled, tracerEnabled, limit, scheduling
- * ✅ Skips internal dashboard routes
+ * ✅ Respects: enabled, tracerEnabled, rateLimit, scheduling toggles
+ * ✅ Skips internal dashboard routes (/api/logs, /api/config, etc.)
  */
 const logger = async (req, res, next) => {
   const startNs = process.hrtime.bigint();
@@ -51,29 +51,39 @@ const logger = async (req, res, next) => {
       const method = req.method;
       const endpoint = req.originalUrl || req.url;
 
-      // 🔒 Skip internal dashboard routes
+      // 🚫 Skip internal dashboard routes completely
       const internalRoutes = [
         "/api/logs",
-        "/api/stats",
         "/api/config",
+        "/api/stats",
+        "/api/health",
         "/favicon.ico",
+        "/",
       ];
-      if (internalRoutes.some((r) => endpoint.startsWith(r))) return;
 
-      // 🔑 API key check
+      if (
+        internalRoutes.some((r) => endpoint.startsWith(r)) ||
+        endpoint.includes("api/logs") ||
+        endpoint.includes("api/config") ||
+        endpoint.includes("api/stats")
+      ) {
+        return; // don't log internal dashboard API requests
+      }
+
+      // 🔑 API key verification
       const apiKeyHeader = req.header("x-api-key") || req.header("apikey");
       const apiKeyValid =
         process.env.TRACER_API_KEY &&
         apiKeyHeader === process.env.TRACER_API_KEY;
 
-     const clientId = req.header("x-client-id")?.trim().toLowerCase() || "default";
-let rawApi = req.header("x-api-name") || endpoint;
-rawApi = rawApi.trim().toLowerCase();
-if (!rawApi.startsWith("/")) rawApi = "/" + rawApi;
-const apiName = `${clientId}:${rawApi}`;
+      // 🧩 Normalize client ID and API name
+      const clientId = req.header("x-client-id")?.trim().toLowerCase() || "default";
+      let rawApi = req.header("x-api-name") || endpoint;
+      rawApi = rawApi.trim().toLowerCase();
+      if (!rawApi.startsWith("/")) rawApi = "/" + rawApi;
+      const apiName = `${clientId}:${rawApi}`;
 
-
-      // 🧩 Ensure config exists (atomic, no duplicates)
+      // ⚙️ Ensure ApiConfig exists (atomic, prevents duplicates)
       const cfg = await ApiConfig.findOneAndUpdate(
         { apiName },
         {
@@ -93,18 +103,16 @@ const apiName = `${clientId}:${rawApi}`;
         { new: true, upsert: true }
       );
 
-      // ⏰ Scheduling check
+      // ⏰ Respect schedule toggle
       if (cfg.scheduling && cfg.startTime && cfg.endTime) {
         const now = new Date();
         const start = new Date(`1970-01-01T${cfg.startTime}:00Z`);
         const end = new Date(`1970-01-01T${cfg.endTime}:00Z`);
-        const nowUTC = new Date(
-          `1970-01-01T${now.toISOString().slice(11, 19)}Z`
-        );
+        const nowUTC = new Date(`1970-01-01T${now.toISOString().slice(11, 19)}Z`);
         if (nowUTC < start || nowUTC > end) return;
       }
 
-      // 🚦 Rate limit check
+      // 🚦 Rate limit enforcement
       if (cfg.limitEnabled && cfg.limitCount && cfg.limitRate) {
         const windowMs = cfg.limitRate * 60000;
         const recentCount = await Log.countDocuments({
@@ -117,10 +125,10 @@ const apiName = `${clientId}:${rawApi}`;
         }
       }
 
-      // ❌ Skip logging if API is disabled
+      // ❌ Skip disabled APIs
       if (cfg.enabled === false) return;
 
-      // 🧾 Build log entry
+      // 🧾 Create and store log entry
       const logEntry = {
         traceId,
         apiName,
@@ -129,8 +137,7 @@ const apiName = `${clientId}:${rawApi}`;
         status,
         responseTimeMs,
         timestamp: new Date(),
-        consoleLogs:
-          apiKeyValid && cfg.tracerEnabled !== false ? buffer : [],
+        consoleLogs: apiKeyValid && cfg.tracerEnabled !== false ? buffer : [],
         apiKeyVerified: apiKeyValid,
       };
 
