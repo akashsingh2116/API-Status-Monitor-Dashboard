@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ensure the page fills viewport so gradient covers everything */
+:root, html, body, #root {
+  height: 100%;
+}
+
+/* translucent panel style used by pages so cards show over gradient */
+.panel {
+  @apply bg-white/5 backdrop-blur-sm rounded-lg p-6;
+}
+
+/* optional animated gradient (uncomment usage in App.jsx below) */
+.app-gradient-animated {
+  background: linear-gradient(135deg, #0f172a 0%, #1e40af 40%, #6d28d9 100%);
+  background-size: 400% 400%;
+  animation: gradientShift 14s ease infinite;
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* static gradient fallback / alternative */
+.app-gradient {
+  background: linear-gradient(135deg, #0b1226 0%, #0f3aa6 45%, #6b21a8 100%);
+}
+/* Subtle scrollbar look for dark dashboard */
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 100, 100, 0.3);
+  border-radius: 10px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(160, 160, 160, 0.5);
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
