@@ -13,26 +13,41 @@ import Log from "./models/log.js";
 dotenv.config();
 const app = express();
 
-// ✅ Fix CORS for production (allow frontend from Vercel)
-app.use(
-  cors({
-    origin: [
-      "https://api-status-monitor-dashboard.vercel.app", // your deployed frontend
-      "http://localhost:5173", // local dev
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: [
-      "Content-Type",
-      "x-api-key",
-      "x-api-name",
-      "x-client-id",
-    ],
-  })
-);
+// --- CORS setup: read ALLOWED_ORIGINS from env or fall back to sensible defaults
+// Example env value: "https://api-status-monitor-dashboard.vercel.app,http://localhost:5173"
+const allowedEnv = process.env.ALLOWED_ORIGINS || "https://api-status-monitor-dashboard.vercel.app,http://localhost:5173";
+const allowedOrigins = allowedEnv.split(",").map(s => s.trim()).filter(Boolean);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // allow requests with no origin (curl, server-to-server)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "authorization",
+    "x-api-key",
+    "x-api-name",
+    "x-client-id",
+    "Accept",
+    "Origin",
+  ],
+  optionsSuccessStatus: 200,
+  // credentials: true, // enable if you plan to send cookies from frontend
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // handle preflight
 
 app.use(express.json());
 
-// 🧩 Attach tracer middleware
+// 🧩 Attach tracer middleware (keep it after CORS + body parser)
 app.use(logger);
 
 // 🧹 Cleanup function – removes internal logs so Config & Home stay clean
@@ -51,6 +66,7 @@ async function cleanupInternalLogs() {
 // ✅ MongoDB connection
 mongoose
   .connect(process.env.MONGO_URI, {
+    // modern mongoose options; ok if redundant
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
@@ -77,6 +93,16 @@ app.get("/simulate/:code", (req, res) => {
 app.use("/api/logs", logRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/config", configRoutes);
+
+// Return JSON 404 for unknown API endpoints (prevents HTML being returned)
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "API route not found" });
+});
+
+// Fallback for other routes (optional)
+app.use((req, res) => {
+  res.status(404).send("Not found");
+});
 
 // 🚀 Start server
 const PORT = process.env.PORT || 5000;
