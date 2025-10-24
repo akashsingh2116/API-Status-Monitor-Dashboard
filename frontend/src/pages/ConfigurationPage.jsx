@@ -5,26 +5,15 @@ export default function ConfigurationPage() {
   const [loading, setLoading] = useState(true);
   const [activeConfig, setActiveConfig] = useState(null);
 
-  // 🔹 Fetch all configs safely
+  // 🔹 Fetch all configs
   const fetchConfigs = async () => {
     setLoading(true);
     try {
       const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/config`);
       const json = await res.json();
-
-      if (Array.isArray(json)) {
-        // Normal expected response
-        setConfigs(json.sort((a, b) => a.apiName.localeCompare(b.apiName)));
-      } else if (json?.data && Array.isArray(json.data)) {
-        // Handle nested data structure
-        setConfigs(json.data.sort((a, b) => a.apiName.localeCompare(b.apiName)));
-      } else {
-        console.warn("⚠️ Unexpected config format:", json);
-        setConfigs([]);
-      }
+      setConfigs(Array.isArray(json) ? json : (json.data || json || [])); // backend returns array, not json.data
     } catch (err) {
-      console.error("❌ Fetch config error:", err);
-      setConfigs([]);
+      console.error("fetch configs err", err);
     } finally {
       setLoading(false);
     }
@@ -46,9 +35,7 @@ export default function ConfigurationPage() {
         }
       );
       const json = await res.json();
-
       if (!res.ok) throw new Error(json.error || "Save failed");
-
       setConfigs((prev) =>
         prev.map((p) => (p.apiName === json.apiName ? json : p))
       );
@@ -60,7 +47,7 @@ export default function ConfigurationPage() {
     }
   };
 
-  // Toggle (no change visually)
+  // Tailwind toggle switch (unchanged visually)
   const Toggle = ({ checked, onChange }) => (
     <button
       type="button"
@@ -99,7 +86,9 @@ export default function ConfigurationPage() {
               key={c.apiName}
               className="grid grid-cols-12 items-center gap-4 py-3 px-4 border-b border-white/5"
             >
-              <div className="col-span-6 text-white font-medium">{c.apiName}</div>
+              <div className="col-span-6 text-white font-medium">
+                {c.apiName}
+              </div>
               <div className="col-span-3 text-gray-300">
                 {new Date(c.startDate || Date.now()).toLocaleDateString()}
               </div>
@@ -119,10 +108,13 @@ export default function ConfigurationPage() {
       {/* Floating Control Box */}
       {activeConfig && (
         <div className="fixed inset-0 z-40">
+          {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/50"
             onClick={() => setActiveConfig(null)}
           />
+
+          {/* Control Box */}
           <div className="absolute bottom-10 right-10 bg-gray-800 text-white w-80 rounded-lg shadow-xl border border-gray-700 z-50 animate-fadeIn">
             <div className="bg-blue-600 px-4 py-2 rounded-t-lg text-sm font-semibold">
               Controls
@@ -151,7 +143,7 @@ export default function ConfigurationPage() {
                 />
               </div>
 
-              {/* Limit */}
+              {/* Limit Toggle */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span>Limit</span>
@@ -192,14 +184,17 @@ export default function ConfigurationPage() {
                 )}
               </div>
 
-              {/* Schedule */}
+              {/* Schedule Toggle */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span>Schedule</span>
                   <Toggle
                     checked={!!activeConfig.scheduling}
                     onChange={(val) =>
-                      setActiveConfig((p) => ({ ...p, scheduling: val }))
+                      setActiveConfig((p) => ({
+                        ...p,
+                        scheduling: val,
+                      }))
                     }
                   />
                 </div>
@@ -231,7 +226,7 @@ export default function ConfigurationPage() {
                 )}
               </div>
 
-              {/* Save */}
+              {/* Save button */}
               <button
                 onClick={() => saveConfig(activeConfig)}
                 className="w-full bg-blue-600 py-2 rounded mt-4 hover:bg-blue-700 transition"

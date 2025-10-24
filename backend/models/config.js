@@ -2,7 +2,7 @@
 import mongoose from "mongoose";
 
 const configSchema = new mongoose.Schema({
- apiName: { type: String, required: true, unique: true },
+  apiName: { type: String, unique: true, required: true },
   startDate: { type: Date, default: Date.now },
   enabled: { type: Boolean, default: true },
   tracerEnabled: { type: Boolean, default: true },

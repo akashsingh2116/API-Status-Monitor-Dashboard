@@ -29,15 +29,3 @@
 .app-gradient {
   background: linear-gradient(135deg, #0b1226 0%, #0f3aa6 45%, #6b21a8 100%);
 }
-/* Subtle scrollbar look for dark dashboard */
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: rgba(100, 100, 100, 0.3);
-  border-radius: 10px;
-}
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(160, 160, 160, 0.5);
-}
-.scrollbar-thin::-webkit-scrollbar {
-  height: 6px;
-  width: 6px;
-}

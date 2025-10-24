@@ -1,21 +1,21 @@
+// middleware/logger.js
 import crypto from "crypto";
 import Log from "../models/log.js";
 import ApiConfig from "../models/config.js";
 
 /**
- * 🔍 Final SRD-Compliant Tracer Middleware (Production Safe)
- * ✅ Captures method, endpoint, status, response time, and console logs
- * ✅ Auto-creates ApiConfig atomically (no duplicates)
- * ✅ Maintains correct firstSeen/startDate
- * ✅ Respects all toggles: enabled, tracerEnabled, rateLimit, scheduling
- * ✅ Ignores internal dashboard API calls (/api/logs, /api/stats, etc.)
- * ✅ Works correctly on Render + Vercel (no duplicate internal entries)
+ * 🔍 SRD-Compliant Tracer Middleware
+ * ✅ Captures method, endpoint, status, response time, console logs
+ * ✅ Generates unique traceId
+ * ✅ Auto-creates ApiConfig entries with correct firstSeen date (idempotent upsert)
+ * ✅ Respects toggles: enabled, tracerEnabled, limit, scheduling
+ * ✅ Skips internal dashboard routes
  */
 const logger = async (req, res, next) => {
   const startNs = process.hrtime.bigint();
   const traceId = crypto.randomUUID();
 
-  // --- Capture console logs per request ---
+  // Capture console logs per request
   const originalConsole = {
     log: console.log,
     info: console.info,
@@ -39,8 +39,16 @@ const logger = async (req, res, next) => {
   console.warn = makePatch("warn");
   console.error = makePatch("error");
 
-  // --- Core finish logic ---
+  // guard to ensure finish runs only once per request
+  let finished = false;
+
+  // Core finish logic
   const finish = async () => {
+    // if already executed, skip
+    if (finished) return;
+    finished = true;
+
+    // Restore console methods immediately
     Object.entries(originalConsole).forEach(([k, fn]) => (console[k] = fn));
 
     try {
@@ -48,67 +56,74 @@ const logger = async (req, res, next) => {
       const responseTimeMs = Number((endNs - startNs) / 1_000_000n);
       const status = res.statusCode || 200;
       const method = req.method;
-      const endpoint = req.originalUrl || req.url;
+      const endpoint = req.originalUrl || req.url || "";
 
-      // 🚫 Skip internal dashboard & static routes
-      const internalPatterns = [
-        /^\/api\/(logs|config|stats|health)/i,
-        /^\/favicon\.ico$/i,
-        /^\/$/i,
-      ];
-      if (internalPatterns.some((p) => p.test(endpoint))) return;
+      // 🔒 Skip internal dashboard routes (use startsWith)
+      const internalRoutes = ["/api/logs", "/api/stats", "/api/config", "/favicon.ico"];
+      if (internalRoutes.some((r) => endpoint.startsWith(r))) return;
 
       // 🔑 API key check
       const apiKeyHeader = req.header("x-api-key") || req.header("apikey");
-      const apiKeyValid =
-        process.env.TRACER_API_KEY &&
-        apiKeyHeader === process.env.TRACER_API_KEY;
+      const apiKeyValid = process.env.TRACER_API_KEY && apiKeyHeader === process.env.TRACER_API_KEY;
 
-      // 🧩 Normalize client ID and API name
-      const clientId =
-        req.header("x-client-id")?.trim().toLowerCase() || "default";
-      let rawApi = req.header("x-api-name") || endpoint;
-      rawApi = rawApi.trim().toLowerCase();
-      if (!rawApi.startsWith("/")) rawApi = "/" + rawApi;
-      const apiName = `${clientId}:${rawApi}`;
+      // Normalize API name
+      let apiName = (req.header("x-api-name") || endpoint || "").toString();
+      apiName = apiName.trim().toLowerCase();
+      if (!apiName.startsWith("/")) apiName = "/" + apiName;
 
-      // ⚙️ Ensure ApiConfig exists atomically
-      const cfg = await ApiConfig.findOneAndUpdate(
-        { apiName },
-        {
-          $setOnInsert: {
-            apiName,
-            startDate: new Date(),
-            enabled: true,
-            tracerEnabled: true,
-            limitEnabled: false,
-            limitCount: 0,
-            limitRate: 0,
-            scheduling: false,
-            startTime: "",
-            endTime: "",
+      // 🧩 Ensure config exists for this API (idempotent upsert)
+      let cfg = null;
+      try {
+        cfg = await ApiConfig.findOneAndUpdate(
+          { apiName },
+          {
+            $setOnInsert: {
+              apiName,
+              startDate: new Date(),
+              enabled: true,
+              tracerEnabled: true,
+              limitEnabled: false,
+              limitCount: 0,
+              limitRate: 0,
+              scheduling: false,
+              startTime: "",
+              endTime: "",
+            },
           },
-        },
-        { new: true, upsert: true }
-      );
+          { upsert: true, new: true }
+        );
+      } catch (err) {
+        // If upsert fails for some reason, log it and try to fetch existing config
+        originalConsole.error("[logger] ApiConfig upsert error:", err && err.message ? err.message : err);
+        cfg = await ApiConfig.findOne({ apiName });
+      }
 
-      // ❌ Skip disabled APIs
-      if (cfg.enabled === false) return;
+      // If config has no startDate or it’s after this request, fix it
+      try {
+        const cfgStart = cfg && cfg.startDate ? new Date(cfg.startDate) : null;
+        if (!cfgStart || cfgStart > new Date()) {
+          cfg.startDate = new Date();
+          await cfg.save();
+        }
+      } catch (err) {
+        originalConsole.error("[logger] Error normalizing cfg.startDate:", err && err.message ? err.message : err);
+      }
 
-      // ⏰ Respect scheduling (active window)
-      if (cfg.scheduling && cfg.startTime && cfg.endTime) {
+      // Skip if disabled
+      if (cfg && cfg.enabled === false) return;
+
+      // Scheduling check
+      if (cfg && cfg.scheduling && cfg.startTime && cfg.endTime) {
         const now = new Date();
         const start = new Date(`1970-01-01T${cfg.startTime}:00Z`);
         const end = new Date(`1970-01-01T${cfg.endTime}:00Z`);
-        const nowUTC = new Date(
-          `1970-01-01T${now.toISOString().slice(11, 19)}Z`
-        );
+        const nowUTC = new Date(`1970-01-01T${now.toISOString().slice(11, 19)}Z`);
         if (nowUTC < start || nowUTC > end) return;
       }
 
-      // 🚦 Rate limit enforcement
-      if (cfg.limitEnabled && cfg.limitCount && cfg.limitRate) {
-        const windowMs = cfg.limitRate * 60000;
+      // Rate limit check
+      if (cfg && cfg.limitEnabled && cfg.limitCount && cfg.limitRate) {
+        const windowMs = cfg.limitRate * 60000; // rate in minutes
         const recentCount = await Log.countDocuments({
           apiName,
           timestamp: { $gte: new Date(Date.now() - windowMs) },
@@ -119,7 +134,7 @@ const logger = async (req, res, next) => {
         }
       }
 
-      // 🧾 Save log entry
+      // Build log entry
       const logEntry = {
         traceId,
         apiName,
@@ -128,23 +143,19 @@ const logger = async (req, res, next) => {
         status,
         responseTimeMs,
         timestamp: new Date(),
-        consoleLogs:
-          apiKeyValid && cfg.tracerEnabled !== false ? buffer : [],
+        consoleLogs: apiKeyValid && cfg && cfg.tracerEnabled !== false ? buffer : [],
         apiKeyVerified: apiKeyValid,
       };
 
       await Log.create(logEntry);
-
-      // 🪶 Debug log (visible in Render console)
-      if (process.env.NODE_ENV !== "production") {
-        console.log(`🪶 [logger] Saved: ${apiName} → ${status}`);
-      }
     } catch (err) {
-      originalConsole.error("❌ Logger error:", err.message || err);
+      originalConsole.error("❌ Error saving log:", err && (err.message || err));
     }
   };
 
+  // attach listeners (guard ensures single execution)
   res.on("finish", finish);
+  res.on("close", finish);
   next();
 };
 

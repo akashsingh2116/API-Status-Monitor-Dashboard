@@ -1,3 +1,4 @@
+// src/pages/HomePage.jsx
 import React, { useEffect, useState } from "react";
 
 function StatusDot({ status }) {
@@ -21,18 +22,19 @@ function StatusDot({ status }) {
   );
 }
 
+
 export default function HomePage() {
   const [apis, setApis] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // Month state
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const fetchApis = async (monthDate) => {
     setLoading(true);
     try {
-      const month = monthDate.toISOString().slice(0, 7);
-      const url = `${
-        import.meta.env.VITE_API_BASE_URL || ""
-      }/api/logs/grouped?month=${month}&page=1&limit=999`;
+      const month = monthDate.toISOString().slice(0, 7); // YYYY-MM
+      const url = `${import.meta.env.VITE_API_BASE_URL || ""}/api/logs/grouped?month=${month}&page=1`;
       const res = await fetch(url);
       const json = await res.json();
       setApis(json?.data || []);
@@ -45,6 +47,7 @@ export default function HomePage() {
 
   useEffect(() => {
     fetchApis(currentMonth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentMonth]);
 
   const changeMonth = (direction) => {
@@ -60,7 +63,7 @@ export default function HomePage() {
     <div className="p-6">
       <h1 className="text-2xl font-semibold mb-4 text-white">APIs</h1>
 
-      {/* Month header */}
+      {/* Month header with arrows */}
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-lg font-semibold text-white">System status</h2>
         <div className="flex items-center gap-4">
@@ -80,7 +83,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* API rows */}
+      {/* API Rows */}
       <div className="space-y-4">
         {apis.length === 0 && !loading ? (
           <div className="text-gray-600">
@@ -88,15 +91,14 @@ export default function HomePage() {
           </div>
         ) : (
           apis.map((api, idx) => {
-            const statuses = Array.isArray(api.statuses) ? api.statuses : [];
-            const lastStatus = statuses.at(-1) || null;
-
+            const statuses = Array.isArray(api.statuses) ? api.statuses.slice(-20) : [];
+            const lastStatus = statuses.length ? statuses[statuses.length - 1] : null;
             return (
               <div
                 key={api.apiName}
                 className="bg-white/5 p-4 rounded-md flex flex-col"
               >
-                {/* Header with API name + ✔/❌ */}
+                {/* Header row with API name + ✔/❌ */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="text-gray-300 w-6 text-right">
@@ -106,7 +108,7 @@ export default function HomePage() {
                   </div>
                   <div>
                     {lastStatus !== null ? (
-                      lastStatus >= 200 && lastStatus < 300 ? (
+                      lastStatus === 200 ? (
                         <div className="text-green-400 font-semibold">✔️</div>
                       ) : (
                         <div className="text-red-400 font-semibold">❌</div>
@@ -117,15 +119,13 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {/* Status Dots Row (subtle horizontal scroll) */}
-                <div className="mt-3 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent hover:scrollbar-thumb-gray-600 transition">
-                  <div className="flex gap-2 min-w-max pb-1">
-                    {statuses.length > 0 ? (
-                      statuses.map((s, i) => <StatusDot key={i} status={s} />)
-                    ) : (
-                      <div className="text-gray-400 text-sm">No checks yet</div>
-                    )}
-                  </div>
+                {/* Status Dots Row */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {statuses.length > 0 ? (
+                    statuses.map((s, i) => <StatusDot key={i} status={s} />)
+                  ) : (
+                    <div className="text-gray-400 text-sm">No checks yet</div>
+                  )}
                 </div>
               </div>
             );

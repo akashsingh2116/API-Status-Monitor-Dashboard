@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import dayjs from "dayjs";
 
-// Utility: Format date
+// Utility: Format date as Today, Yesterday, or readable
 function formatDate(dateStr) {
   const date = new Date(dateStr);
   const today = new Date();
@@ -32,7 +32,7 @@ function ConsoleLine({ log }) {
   );
 }
 
-// Log entry card
+// Log entry component
 function LogEntry({ log }) {
   return (
     <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-100 shadow">
@@ -66,6 +66,7 @@ function LogEntry({ log }) {
         <div>{log.responseTimeMs} ms</div>
       </div>
 
+      {/* Console logs */}
       {Array.isArray(log.consoleLogs) && log.consoleLogs.length > 0 && (
         <div className="mt-2 pl-3 border-l-2 border-gray-700 space-y-1">
           {log.consoleLogs.map((cl, i) => (
@@ -81,29 +82,22 @@ export default function TracerPage() {
   const [logs, setLogs] = useState([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [totalPages, setTotalPages] = useState(null); // track total pages from backend
   const loaderRef = useRef(null);
 
-  // ✅ Safe fetch with hasMore & empty result check
   const fetchLogs = async (pageNum = 1) => {
-    if (loading || !hasMore) return;
-
     setLoading(true);
     try {
       const today = new Date().toISOString().slice(0, 10);
       const url = `${
         import.meta.env.VITE_API_BASE_URL
       }/api/logs?from=2025-09-01&to=${today}&page=${pageNum}`;
-
       const res = await fetch(url);
       const data = await res.json();
-
-      if (!data.data || data.data.length === 0) {
-        setHasMore(false);
-        return;
-      }
-
-      setLogs((prev) => [...prev, ...data.data]);
+      // backend returns { data: [...], pagination: { currentPage, totalPages } }
+      setTotalPages(data.pagination?.totalPages ?? null);
+      if (pageNum === 1) setLogs(data.data || []);
+      else setLogs((prev) => [...prev, ...(data.data || [])]);
     } catch (err) {
       console.error("Tracer fetch error:", err);
     } finally {
@@ -111,41 +105,31 @@ export default function TracerPage() {
     }
   };
 
- useEffect(() => {
-  let ignore = false;
-  const run = async () => {
-    if (!ignore) await fetchLogs(1);
-  };
-  run();
-  return () => {
-    ignore = true;
-  };
-}, []);
-
-
-  // ✅ Stable infinite scroll observer
   useEffect(() => {
-    if (!hasMore) return;
+    fetchLogs(1);
+  }, []);
+
+  // Infinite scroll observer
+  useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !loading && hasMore) {
-          const next = page + 1;
-          setPage(next);
-          fetchLogs(next);
+        if (entries[0].isIntersecting && !loading) {
+          // only fetch next page if we don't know totalPages yet or haven't reached it
+          if (totalPages === null || page < totalPages) {
+            const nextPage = page + 1;
+            setPage(nextPage);
+            fetchLogs(nextPage);
+          }
         }
       },
-      { threshold: 1 }
+      { threshold: 0.5 }
     );
 
-    const node = loaderRef.current;
-    if (node) observer.observe(node);
+    if (loaderRef.current) observer.observe(loaderRef.current);
+    return () => observer.disconnect();
+  }, [loading, page]);
 
-    return () => {
-      if (node) observer.unobserve(node);
-    };
-  }, [loading, hasMore, page]);
-
-  // Group logs by formatted date
+  // Group logs by date
   const grouped = logs.reduce((acc, log) => {
     const key = formatDate(log.timestamp);
     acc[key] = acc[key] || [];
@@ -157,34 +141,24 @@ export default function TracerPage() {
     <div className="p-6 text-white bg-gray-900 min-h-screen">
       <h1 className="text-2xl font-semibold mb-6">Tracer Logs</h1>
 
-      {Object.keys(grouped).length === 0 && !loading ? (
-        <div className="text-gray-400 text-center py-8">
-          No logs found yet. Try calling an API through the middleware.
-        </div>
-      ) : (
-        Object.keys(grouped).map((date) => (
-          <div key={date} className="mb-8">
-            <div className="flex items-center mb-4">
-              <div className="flex-grow border-t border-gray-700"></div>
-              <span className="px-3 text-gray-400 text-sm">{date}</span>
-              <div className="flex-grow border-t border-gray-700"></div>
-            </div>
-
-            <div className="space-y-3">
-              {grouped[date].map((log, i) => (
-                <LogEntry key={i} log={log} />
-              ))}
-            </div>
+      {Object.keys(grouped).map((date) => (
+        <div key={date} className="mb-8">
+          <div className="flex items-center mb-4">
+            <div className="flex-grow border-t border-gray-700"></div>
+            <span className="px-3 text-gray-400 text-sm">{date}</span>
+            <div className="flex-grow border-t border-gray-700"></div>
           </div>
-        ))
-      )}
+
+          <div className="space-y-3">
+            {grouped[date].map((log, i) => (
+              <LogEntry key={i} log={log} />
+            ))}
+          </div>
+        </div>
+      ))}
 
       <div ref={loaderRef} className="text-center py-6 text-gray-400">
-        {loading
-          ? "Loading more logs..."
-          : hasMore
-          ? "Scroll to load more"
-          : "No more logs available"}
+        {loading ? "Loading more logs..." : (totalPages && page >= totalPages ? "No more logs" : "Scroll to load more")}
       </div>
     </div>
   );
