@@ -1,4 +1,4 @@
-// server.js
+// backend/server.js
 import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
@@ -13,73 +13,58 @@ import Log from "./models/log.js";
 dotenv.config();
 const app = express();
 
-// --- CORS setup: read ALLOWED_ORIGINS from env or fall back to sensible defaults
-// Example env value: "https://api-status-monitor-dashboard.vercel.app,http://localhost:5173"
-const allowedEnv = process.env.ALLOWED_ORIGINS || "https://api-status-monitor-dashboard.vercel.app,http://localhost:5173";
-const allowedOrigins = allowedEnv.split(",").map(s => s.trim()).filter(Boolean);
-
-const corsOptions = {
-  origin: (origin, callback) => {
-    // allow requests with no origin (curl, server-to-server)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error("Not allowed by CORS"));
-  },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "authorization",
-    "x-api-key",
-    "x-api-name",
-    "x-client-id",
-    "Accept",
-    "Origin",
-  ],
-  optionsSuccessStatus: 200,
-  // credentials: true, // enable if you plan to send cookies from frontend
-};
-
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // handle preflight
+// ✅ CORS: allow your frontend(s)
+app.use(
+  cors({
+    origin: [
+      "https://api-status-monitor-dashboard.vercel.app", // frontend production
+      "http://localhost:5173", // local dev
+      // add any other allowed origins here
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "x-api-key",
+      "x-api-name",
+      "x-client-id",
+      "authorization",
+    ],
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
-// 🧩 Attach tracer middleware (keep it after CORS + body parser)
+// attach tracer middleware
 app.use(logger);
 
-// 🧹 Cleanup function – removes internal logs so Config & Home stay clean
+// cleanup internal logs (delete any logs coming from dashboard internal endpoints)
 async function cleanupInternalLogs() {
   try {
     const result = await Log.deleteMany({
       endpoint: { $regex: "^/api/(logs|stats|config)", $options: "i" },
     });
-    if (result.deletedCount > 0)
+    if (result.deletedCount > 0) {
       console.log(`🧹 Cleaned ${result.deletedCount} internal log entries`);
+    }
   } catch (err) {
     console.error("❌ Cleanup failed:", err.message);
   }
 }
 
-// ✅ MongoDB connection
+// connect to MongoDB
 mongoose
-  .connect(process.env.MONGO_URI, {
-    // modern mongoose options; ok if redundant
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(process.env.MONGO_URI)
   .then(async () => {
     console.log("✅ MongoDB Atlas Connected");
     await cleanupInternalLogs();
   })
   .catch((err) => console.error("❌ DB Error:", err));
 
-// 🧪 Test route
+// Test route
 app.get("/", (req, res) => res.send("✅ API Backend Running Successfully!"));
 
-// 🧠 Simulated routes (used by PowerShell testing)
+// Simulation route (used by your PowerShell scripts)
 app.get("/simulate/:code", (req, res) => {
   const code = Number(req.params.code) || 200;
   console.log(
@@ -89,21 +74,14 @@ app.get("/simulate/:code", (req, res) => {
   res.status(code).send(`Simulated response with status ${code}`);
 });
 
-// 📡 Real API routes
+// API routes
 app.use("/api/logs", logRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/config", configRoutes);
 
-// Return JSON 404 for unknown API endpoints (prevents HTML being returned)
-app.use("/api", (req, res) => {
-  res.status(404).json({ error: "API route not found" });
-});
+// If you previously had app.options('*', ...) or app.use('*', ...), remove or change to '/*'.
+// We do not register any raw '*' route here.
 
-// Fallback for other routes (optional)
-app.use((req, res) => {
-  res.status(404).send("Not found");
-});
-
-// 🚀 Start server
+// start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
