@@ -1,5 +1,5 @@
 $BASE = "http://localhost:5000"
-$KEY = "my-secret-key-123"
+$KEY = "akash-singh-2116"
 
 # 5 APIs
 $apis = @(
