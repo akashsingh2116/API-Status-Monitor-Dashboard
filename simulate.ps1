@@ -1,13 +1,17 @@
 $BASE = "http://localhost:5000"
 $KEY = "akash-singh-2116"
 
-# 5 APIs
+# 9 APIs
 $apis = @(
   "/api/social",
+  "/api/weather",
   "/api/data",
+  "/api/link",
   "/api/inventory",
   "/api/payment",
-  "/api/analytics"
+  "/api/analytics",
+  "/api/profile",
+  "/api/notifications"
 )
 
 Write-Host "=== Simulating Random API Calls for Testing ==="

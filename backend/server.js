@@ -58,8 +58,6 @@ app.get("/simulate/:code", (req, res) => {
 app.use("/api/logs", logRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/config", configRoutes);
-// Debug diagnostics
-
 
 // 🚀 Start server
 const PORT = process.env.PORT || 5000;

@@ -1,16 +1,29 @@
 // routes/configRoutes.js
 import express from "express";
 import ApiConfig from "../models/config.js";
-import Log from "../models/log.js"; // ✅ to find first-seen log
+import Log from "../models/log.js"; // ✅ used for syncing
 
 const router = express.Router();
 
 /**
  * ✅ GET all API configurations
+ * Shows only APIs that currently exist in logs.
+ * Removes stale configs automatically.
  */
 router.get("/", async (req, res) => {
   try {
-    const configs = await ApiConfig.find().sort({ apiName: 1 });
+    // Step 1: Get distinct API names from logs
+    const activeApis = await Log.distinct("apiName");
+
+    // Step 2: Delete any configs not in active logs
+    await ApiConfig.deleteMany({ apiName: { $nin: activeApis } });
+
+    // Step 3: Get updated configs list
+    const configs = await ApiConfig.find({
+      apiName: { $in: activeApis },
+    }).sort({ apiName: 1 });
+
+    // Step 4: Return clean synced data
     res.json({ data: configs });
   } catch (err) {
     console.error("Error fetching configs:", err.message);
@@ -20,9 +33,7 @@ router.get("/", async (req, res) => {
 
 /**
  * ✅ POST create new config
- * Automatically sets:
- * - startDate = date of first log entry for this API (if exists)
- * - default toggles = true
+ * Sets startDate = date of first log entry if exists, otherwise now.
  */
 router.post("/", async (req, res) => {
   try {
@@ -36,7 +47,7 @@ router.post("/", async (req, res) => {
     if (existing)
       return res.status(400).json({ error: "API config already exists" });
 
-    // ✅ Find first log entry for this API (oldest timestamp)
+    // ✅ Find first log entry (oldest) for correct startDate
     const firstLog = await Log.findOne({ apiName: normalized })
       .sort({ timestamp: 1 })
       .lean();
@@ -65,7 +76,7 @@ router.post("/", async (req, res) => {
 
 /**
  * ✅ PUT update existing config
- * Updates any field for given API.
+ * Fully SRD-compliant update logic.
  */
 router.put("/:apiName", async (req, res) => {
   try {
