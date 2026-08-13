@@ -1,102 +1,152 @@
 // routes/configRoutes.js
 import express from "express";
+import crypto from "crypto";
+import mongoose from "mongoose";
 import ApiConfig from "../models/config.js";
-import Log from "../models/log.js"; // ✅ used for syncing
+import Log from "../models/log.js";
+import requireAuth from "../middleware/auth.js";
 
 const router = express.Router();
+router.use(requireAuth);
 
-/**
- * ✅ GET all API configurations
- * Shows only APIs that currently exist in logs.
- * Removes stale configs automatically.
- */
+const generateApiKey = () => `ak_${crypto.randomBytes(24).toString("hex")}`;
+
+const UPDATABLE_FIELDS = [
+  "name",
+  "enabled",
+  "tracerEnabled",
+  "limitEnabled",
+  "limitCount",
+  "limitRate",
+  "scheduling",
+  "startTime",
+  "endTime",
+];
+
+const FIELD_VALIDATORS = {
+  name: (v) => typeof v === "string" && v.trim().length > 0 && v.trim().length <= 80,
+  enabled: (v) => typeof v === "boolean",
+  tracerEnabled: (v) => typeof v === "boolean",
+  limitEnabled: (v) => typeof v === "boolean",
+  limitCount: (v) => typeof v === "number" && v >= 0,
+  limitRate: (v) => typeof v === "number" && v >= 0,
+  scheduling: (v) => typeof v === "boolean",
+  startTime: (v) => typeof v === "string",
+  endTime: (v) => typeof v === "string",
+};
+
+const pickValidUpdates = (body) => {
+  const updates = {};
+  for (const field of UPDATABLE_FIELDS) {
+    if (body[field] === undefined) continue;
+    if (!FIELD_VALIDATORS[field](body[field])) {
+      throw new Error(`Invalid value for field "${field}"`);
+    }
+    updates[field] = field === "name" ? body[field].trim() : body[field];
+  }
+  return updates;
+};
+
+// GET all APIs registered by the logged-in user
 router.get("/", async (req, res) => {
   try {
-    // Step 1: Get distinct API names from logs
-    const activeApis = await Log.distinct("apiName");
-
-    // Step 2: Delete any configs not in active logs
-    await ApiConfig.deleteMany({ apiName: { $nin: activeApis } });
-
-    // Step 3: Get updated configs list
-    const configs = await ApiConfig.find({
-      apiName: { $in: activeApis },
-    }).sort({ apiName: 1 });
-
-    // Step 4: Return clean synced data
+    const configs = await ApiConfig.find({ userId: req.userId }).sort({ createdAt: -1 });
     res.json({ data: configs });
   } catch (err) {
     console.error("Error fetching configs:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error while fetching configs" });
   }
 });
 
-/**
- * ✅ POST create new config
- * Sets startDate = date of first log entry if exists, otherwise now.
- */
+// POST create a new tracked API for the logged-in user
 router.post("/", async (req, res) => {
   try {
-    const { apiName } = req.body;
-    if (!apiName)
-      return res.status(400).json({ error: "API name is required" });
-
-    const normalized = apiName.trim().toLowerCase();
-    const existing = await ApiConfig.findOne({ apiName: normalized });
-
-    if (existing)
-      return res.status(400).json({ error: "API config already exists" });
-
-    // ✅ Find first log entry (oldest) for correct startDate
-    const firstLog = await Log.findOne({ apiName: normalized })
-      .sort({ timestamp: 1 })
-      .lean();
-
-    const startDate = firstLog ? firstLog.timestamp : new Date();
+    const { name } = req.body || {};
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "A name for the API is required" });
+    }
 
     const config = await ApiConfig.create({
-      apiName: normalized,
-      startDate,
-      enabled: true,
-      tracerEnabled: true,
-      limitEnabled: false,
-      limitCount: 0,
-      limitRate: 0,
-      scheduling: false,
-      startTime: "",
-      endTime: "",
+      userId: req.userId,
+      name: name.trim(),
+      apiKey: generateApiKey(),
     });
 
     res.status(201).json(config);
   } catch (err) {
     console.error("Error creating config:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error while creating config" });
   }
 });
 
-/**
- * ✅ PUT update existing config
- * Fully SRD-compliant update logic.
- */
-router.put("/:apiName", async (req, res) => {
+// PUT update an existing API config (only fields owned by this user)
+router.put("/:id", async (req, res) => {
   try {
-    const { apiName } = req.params;
-    const updates = req.body;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid config id" });
+    }
 
-    const normalized = apiName.trim().toLowerCase();
+    let updates;
+    try {
+      updates = pickValidUpdates(req.body || {});
+    } catch (validationErr) {
+      return res.status(400).json({ error: validationErr.message });
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
     const config = await ApiConfig.findOneAndUpdate(
-      { apiName: normalized },
+      { _id: req.params.id, userId: req.userId },
       updates,
       { new: true }
     );
 
-    if (!config)
-      return res.status(404).json({ error: "API config not found" });
-
+    if (!config) return res.status(404).json({ error: "API config not found" });
     res.json(config);
   } catch (err) {
     console.error("Error updating config:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Server error while updating config" });
+  }
+});
+
+// POST regenerate the API key for a config (e.g. if it leaked)
+router.post("/:id/regenerate-key", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid config id" });
+    }
+
+    const config = await ApiConfig.findOneAndUpdate(
+      { _id: req.params.id, userId: req.userId },
+      { apiKey: generateApiKey() },
+      { new: true }
+    );
+
+    if (!config) return res.status(404).json({ error: "API config not found" });
+    res.json(config);
+  } catch (err) {
+    console.error("Error regenerating key:", err.message);
+    res.status(500).json({ error: "Server error while regenerating key" });
+  }
+});
+
+// DELETE a tracked API and its logs
+router.delete("/:id", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid config id" });
+    }
+
+    const config = await ApiConfig.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+    if (!config) return res.status(404).json({ error: "API config not found" });
+
+    await Log.deleteMany({ configId: config._id });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error deleting config:", err.message);
+    res.status(500).json({ error: "Server error while deleting config" });
   }
 });
 
